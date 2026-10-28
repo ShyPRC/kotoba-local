@@ -1,0 +1,16 @@
+.build/
+dist/
+.DS_Store
+.swiftpm/
+xcuserdata/
+.env
+.env.*
+*.caf
+*.aiff
+*.wav
+*.m4a
+*.mp3
+*.mp4
+*.mov
+*.pcm
+transcript.json

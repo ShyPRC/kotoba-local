@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>KotobaLocal</string>
+<key>CFBundleIdentifier</key><string>local.kotoba.recorder</string>
+<key>CFBundleName</key><string>言录</string>
+<key>CFBundleDisplayName</key><string>言录</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>NSMicrophoneUsageDescription</key><string>言录需要使用麦克风录制课堂音频，并在这台 Mac 上转写日语。</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>言录使用系统本地语音模型将日语课堂录音转换为文字。</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>
