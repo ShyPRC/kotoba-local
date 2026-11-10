@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Speech
 import SwiftUI
@@ -14,7 +15,10 @@ final class AudioPipe: @unchecked Sendable {
     let target: AVAudioFormat
     let continuation: AsyncStream<AnalyzerInput>.Continuation
     let onError: @Sendable (String) -> Void
+    private var recordedFrames: AVAudioFramePosition = 0
     private var failed = false
+    private var finished = false
+    var recordedDuration: TimeInterval { Double(recordedFrames) / file.processingFormat.sampleRate }
 
     init(url: URL, input: AVAudioFormat, target: AVAudioFormat, continuation: AsyncStream<AnalyzerInput>.Continuation, onError: @escaping @Sendable (String) -> Void) throws {
         file = try AVAudioFile(forWriting: url, settings: input.settings)
@@ -25,9 +29,10 @@ final class AudioPipe: @unchecked Sendable {
         self.onError = onError
     }
     func receive(_ input: AVAudioPCMBuffer) {
-        guard !failed else { return }
+        guard !failed, !finished else { return }
         do {
             try file.write(from: input)
+            recordedFrames += AVAudioFramePosition(input.frameLength)
             let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) * target.sampleRate / input.format.sampleRate)) + 256
             guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { throw AppFailure.message("音频缓冲区分配失败。") }
             var supplied = false
@@ -47,6 +52,9 @@ final class AudioPipe: @unchecked Sendable {
     }
     // Resampling buffers a short tail; feed end-of-stream before closing recognition.
     func finish() {
+        guard !finished else { return }
+        finished = true
+        defer { file.close() }
         guard !failed else { return }
         while let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096) {
             var conversionError: NSError?
@@ -71,6 +79,7 @@ final class Recorder: ObservableObject {
     @Published var isRecording = false
     @Published var status = "准备就绪"
     @Published var elapsed: Double = 0
+    @Published private(set) var remainingSeconds: Int?
     var activeID: UUID?
     private let library: Library
     private var engine: AVAudioEngine?
@@ -80,9 +89,16 @@ final class Recorder: ObservableObject {
     private var pipe: AudioPipe?
     private var pendingID: UUID?
     private var timer: Timer?
-    private var startDate: Date?
+    private var sleepObserver: NotificationCenter.ObservationToken?
+    private var recordingActivity: NSObjectProtocol?
 
-    init(library: Library) { self.library = library }
+    init(library: Library) {
+        self.library = library
+        let workspace = NSWorkspace.shared
+        sleepObserver = workspace.notificationCenter.addObserver(of: workspace, for: .willSleep) { [weak self] _ in
+            self?.stop(savedStatus: "休眠前已停止并保存")
+        }
+    }
 
     private func prepare() async throws -> (SpeechTranscriber, SpeechAnalyzer) {
         status = "检查本地日语识别模型…"
@@ -115,12 +131,12 @@ final class Recorder: ObservableObject {
                 }
             } catch {
                 library.message = "转写中断，原始录音已保留：\(error.localizedDescription)"
-                if isRecording { Task { await self.stop() } }
+                stop()
             }
         }
     }
 
-    func start() async {
+    func start(autoStopAfterMinutes: Int?) async {
         guard !busy else { return }
         busy = true
         do {
@@ -143,7 +159,7 @@ final class Recorder: ObservableObject {
             let pipe = try AudioPipe(url: library.audio(id)!, input: input, target: target, continuation: continuation) { [weak self] text in
                 Task { @MainActor in
                     self?.library.message = "录音保存或处理失败：\(text)"
-                    await self?.stop()
+                    self?.stop()
                 }
             }
             self.pipe = pipe
@@ -153,16 +169,30 @@ final class Recorder: ObservableObject {
             engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: input) { buffer, _ in pipe.receive(buffer) }
             engine.prepare()
             try engine.start()
+            let startTime = ContinuousClock.now
+            let limitSeconds = autoStopAfterMinutes.map { $0 * 60 }
+            recordingActivity = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled, reason: "正在录音")
             isRecording = true
-            startDate = Date()
             elapsed = 0
+            remainingSeconds = limitSeconds
             status = "正在录音 · 日语实时转写"
-            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in
-                    guard let self, let date = self.startDate else { return }
-                    self.elapsed = Date().timeIntervalSince(date)
+                    guard let self, self.isRecording, self.activeID == id else { return }
+                    let duration = startTime.duration(to: .now)
+                    let parts = duration.components
+                    self.elapsed = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+                    if let limitSeconds {
+                        if duration >= .seconds(limitSeconds) {
+                            self.stop(savedStatus: "已到时，录音已保存")
+                        } else {
+                            self.remainingSeconds = limitSeconds - Int(parts.seconds)
+                        }
+                    }
                 }
             }
+            self.timer = timer
+            RunLoop.main.add(timer, forMode: .common)
         } catch {
             library.message = error.localizedDescription
             await cleanup()
@@ -171,21 +201,31 @@ final class Recorder: ObservableObject {
         }
     }
 
-    func stop() async {
+    func stop(savedStatus: String = "已保存") {
         guard isRecording else { return }
+        // Commit the audio and duration before returning to the sleep notification.
         isRecording = false
         timer?.invalidate()
         timer = nil
-        if let date = startDate { elapsed = Date().timeIntervalSince(date) }
+        remainingSeconds = nil
         engine?.stop()
         engine?.inputNode.removeTap(onBus: 0)
         engine = nil
+        elapsed = pipe?.recordedDuration ?? elapsed
         pipe?.finish()
-        pipe = nil // closes the audio file after the tap has stopped
+        pipe = nil
         continuation?.finish()
         continuation = nil
-        status = "正在完成最后一段转写…"
         if let id = activeID { library.update(id) { $0.duration = elapsed } }
+        if let recordingActivity {
+            ProcessInfo.processInfo.endActivity(recordingActivity)
+            self.recordingActivity = nil
+        }
+        status = "\(savedStatus) · 正在完成最后一段转写…"
+        Task { await finishTranscription(savedStatus: savedStatus) }
+    }
+
+    private func finishTranscription(savedStatus: String) async {
         do { try await analyzer?.finalizeAndFinishThroughEndOfInput() }
         catch { library.message = "收尾转写失败，录音已保存：\(error.localizedDescription)" }
         await resultTask?.value
@@ -193,11 +233,10 @@ final class Recorder: ObservableObject {
         analyzer = nil
         activeID = nil
         busy = false
-        status = "已保存 · 中文翻译会继续完成"
+        status = "\(savedStatus) · 中文翻译会继续完成"
     }
 
     private func cleanup() async {
-        timer?.invalidate()
         if let engine { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
         engine = nil
         pipe = nil

@@ -39,6 +39,7 @@ final class RecordingTests: XCTestCase {
         var pipe: AudioPipe? = try AudioPipe(url: url, input: source, target: target, continuation: continuation) { message in XCTFail(message) }
         pipe?.receive(buffer)
         pipe?.finish()
+        XCTAssertEqual(try XCTUnwrap(pipe).recordedDuration, 0.1, accuracy: 0.0001)
         pipe = nil
         continuation.finish()
         var frames: AVAudioFrameCount = 0

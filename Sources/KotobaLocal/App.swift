@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct ContentView: View {
     @ObservedObject var library: Library
     @ObservedObject var recorder: Recorder
+    @AppStorage("autoStopEnabled") private var autoStopEnabled = true
+    @AppStorage("autoStopMinutes") private var autoStopMinutes = "100"
     @State private var search = ""
     @State private var translationStatus = "正在准备日中翻译…"
     @State private var translationReady = false
@@ -57,6 +59,11 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     private var accent: Color {
         colorScheme == .dark ? Color(red: 0.48, green: 0.77, blue: 0.67) : Color(red: 0.17, green: 0.39, blue: 0.35)
+    }
+    private var validatedAutoStopMinutes: Int? {
+        guard let minutes = Int(autoStopMinutes.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...1440).contains(minutes) else { return nil }
+        return minutes
     }
 
     var body: some View {
@@ -168,17 +175,43 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 Button {
                     player?.stop(); player = nil
-                    Task { if recorder.isRecording { await recorder.stop() } else { await recorder.start() } }
+                    if recorder.isRecording {
+                        recorder.stop()
+                    } else {
+                        let limit = autoStopEnabled ? validatedAutoStopMinutes : nil
+                        Task { await recorder.start(autoStopAfterMinutes: limit) }
+                    }
                 } label: { Label(recorder.isRecording ? "停止并保存" : "开始录音", systemImage: recorder.isRecording ? "stop.fill" : "mic.fill").padding(.horizontal, 16).padding(.vertical, 8) }
-                .buttonStyle(.borderedProminent).disabled(recorder.busy && !recorder.isRecording)
+                .buttonStyle(.borderedProminent)
+                .disabled(!recorder.isRecording && (recorder.busy || (autoStopEnabled && validatedAutoStopMinutes == nil)))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(recorder.status).font(.system(size: 12, weight: .medium))
-                    if recorder.busy { Text(Recording.clock(recorder.elapsed)).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary) }
+                    if recorder.busy {
+                        HStack(spacing: 12) {
+                            Text(Recording.clock(recorder.elapsed))
+                            if let remaining = recorder.remainingSeconds {
+                                Text("剩余 \(Recording.clock(Double(remaining)))")
+                            }
+                        }.font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button { playAudio() } label: { Label(player?.isPlaying == true ? "停止回听" : "回听录音", systemImage: "play.circle") }.disabled(recorder.busy || library.selected == nil)
                 Button { if let id = library.selection { NSWorkspace.shared.open(library.directory(id)) } } label: { Image(systemName: "folder") }.help("打开本地录音文件夹").disabled(library.selected == nil)
             }
+            HStack(spacing: 8) {
+                Toggle("定时停止录音", isOn: $autoStopEnabled).toggleStyle(.checkbox)
+                if autoStopEnabled {
+                    TextField("录音时限（分钟）", text: $autoStopMinutes, prompt: Text("100"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 62)
+                    Text("分钟").foregroundStyle(.secondary)
+                    if validatedAutoStopMinutes == nil {
+                        Text("请输入 1–1440 之间的整数").foregroundStyle(.orange)
+                    }
+                }
+            }.font(.caption).disabled(recorder.busy)
             HStack {
                 Circle().fill(translationReady ? accent : .orange).frame(width: 6, height: 6)
                 Text(translationStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(2)

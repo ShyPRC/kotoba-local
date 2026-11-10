@@ -4,6 +4,8 @@
 
 A native macOS app for Japanese lecture recording, live Japanese transcription, Simplified Chinese translation, and full bilingual transcript export. Powered by Apple's on-device Speech and Translation frameworks, with no third-party dependencies or API keys.
 
+[更新日志](CHANGELOG.md)
+
 ## 从源码构建
 
 需要 Apple 芯片 Mac、macOS 26 或更新版本，以及包含 macOS 26 SDK 的 Xcode 26 或更新版本。先打开 Xcode，完成其首次启动设置。
@@ -28,9 +30,9 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 构建后的应用位于 `dist/言录.app`，双击即可打开。需要 Apple 芯片 Mac、macOS 26 或更新版本。当前版本在本机签名，未做 Apple 公证。
 
 1. 首次打开时，按系统提示下载日语／简体中文翻译资源。
-2. 点击「开始录音」，允许麦克风访问。首次转写会下载系统日语识别模型；准备期间还没有开始录音，请等待底部显示「正在录音」。
+2. 底部的「定时停止录音」默认设为 100 分钟。可在开始前修改或关闭，设置会保留。点击「开始录音」并允许麦克风访问。首次转写会下载系统日语识别模型，倒计时从麦克风开始录音时算起。
 3. 日语原文实时更新，段落确认后自动翻译成中文。具体延迟取决于语速、停顿与设备速度。
-4. 点击「停止并保存」，等待最后一段转写收尾。中文翻译仍会继续，建议等「已翻译」数量与段落数量一致后再导出。
+4. 到时会自动停止并保存，也可随时点击「停止并保存」。合盖触发系统休眠时会提前结束录音并保存，尚未完成的转写和翻译可在唤醒后继续。建议等「已翻译」数量与段落数量一致后再导出。
 5. 点击「导出全文」，选择 TXT、Markdown 或双语 SRT。每份导出包含当前所选录音的全部文字。
 
 也可以导入系统支持的音频文件进行本地转写，或通过「回听录音」播放原始音频。点击文件夹按钮可直接查看原始录音和 JSON 记录。
