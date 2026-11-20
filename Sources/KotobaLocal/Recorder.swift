@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreAudio
 import Speech
 import SwiftUI
 
@@ -80,6 +81,13 @@ final class Recorder: ObservableObject {
     @Published var status = "准备就绪"
     @Published var elapsed: Double = 0
     @Published private(set) var remainingSeconds: Int?
+    @Published private(set) var inputDevices: [AudioInputDevice] = []
+    @Published private(set) var defaultInputName = "暂无可用设备"
+    @Published private(set) var inputDeviceError: String?
+    @Published private(set) var activeInputName: String?
+    @Published var selectedInputUID = UserDefaults.standard.string(forKey: "recordingInputUID") ?? "" {
+        didSet { UserDefaults.standard.set(selectedInputUID, forKey: "recordingInputUID") }
+    }
     var activeID: UUID?
     private let library: Library
     private var engine: AVAudioEngine?
@@ -92,11 +100,54 @@ final class Recorder: ObservableObject {
     private var sleepObserver: NotificationCenter.ObservationToken?
     private var recordingActivity: NSObjectProtocol?
 
+    private var inputDeviceListener: AudioObjectPropertyListenerBlock?
+    private var engineObserver: NSObjectProtocol?
+    private var activeInputUID: String?
+    private let deviceSelectors: [AudioObjectPropertySelector] = [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice]
+
+    var selectedInputUnavailable: Bool {
+        !selectedInputUID.isEmpty && !inputDevices.contains { $0.id == selectedInputUID }
+    }
+
     init(library: Library) {
         self.library = library
         let workspace = NSWorkspace.shared
         sleepObserver = workspace.notificationCenter.addObserver(of: workspace, for: .willSleep) { [weak self] _ in
             self?.stop(savedStatus: "休眠前已停止并保存")
+        }
+        refreshInputDevices()
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor in self?.refreshInputDevices() }
+        }
+        inputDeviceListener = listener
+        for selector in deviceSelectors {
+            var address = AudioInputDevice.propertyAddress(selector)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
+        }
+    }
+
+    deinit {
+        if let inputDeviceListener {
+            for selector in deviceSelectors {
+                var address = AudioInputDevice.propertyAddress(selector)
+                AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, inputDeviceListener)
+            }
+        }
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+    }
+
+    func refreshInputDevices() {
+        do {
+            inputDevices = try AudioInputDevice.available()
+            let defaultID = AudioInputDevice.defaultDeviceID()
+            defaultInputName = inputDevices.first { $0.deviceID == defaultID }?.name ?? "暂无可用设备"
+            inputDeviceError = nil
+            if isRecording, let activeInputUID, !inputDevices.contains(where: { $0.id == activeInputUID }) {
+                library.message = "录音设备已断开，已有录音已保存。请选择可用设备后重新开始录音。"
+                stop(savedStatus: "设备断开，录音已保存")
+            }
+        } catch {
+            inputDeviceError = error.localizedDescription
         }
     }
 
@@ -145,7 +196,18 @@ final class Recorder: ObservableObject {
             }
             let (transcriber, analyzer) = try await prepare()
             self.analyzer = analyzer
+            refreshInputDevices()
+            if let inputDeviceError { throw AppFailure.message(inputDeviceError) }
+            let defaultID = AudioInputDevice.defaultDeviceID()
+            let selectedDevice = inputDevices.first {
+                selectedInputUID.isEmpty ? $0.deviceID == defaultID : $0.id == selectedInputUID
+            }
+            guard let selectedDevice else {
+                throw AppFailure.message("所选录音设备不可用，请连接设备，或在“录音设备”中选择其他麦克风。")
+            }
             let engine = AVAudioEngine()
+            do { try engine.inputNode.auAudioUnit.setDeviceID(selectedDevice.deviceID) }
+            catch { throw AppFailure.message("无法使用“\(selectedDevice.name)”录音：\(error.localizedDescription)") }
             let input = engine.inputNode.outputFormat(forBus: 0)
             guard input.sampleRate > 0, input.channelCount > 0,
                   let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: input) else {
@@ -164,8 +226,23 @@ final class Recorder: ObservableObject {
             }
             self.pipe = pipe
             self.engine = engine
+            // Device changes arrive on an audio queue; tear down the engine on the main actor.
+            engineObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self, weak engine] _ in
+                Task { @MainActor in
+                    guard let self, let engine, self.engine === engine, self.isRecording else { return }
+                    guard !engine.isRunning || engine.inputNode.auAudioUnit.deviceID != selectedDevice.deviceID else { return }
+                    self.library.message = "音频设备配置发生变化，已有录音已保存。请检查录音设备后重新开始录音。"
+                    self.stop(savedStatus: "设备变化，录音已保存")
+                }
+            }
             listen(transcriber, id: id)
             try await analyzer.start(inputSequence: stream)
+            let currentInput = engine.inputNode.outputFormat(forBus: 0)
+            guard engine.inputNode.auAudioUnit.deviceID == selectedDevice.deviceID,
+                  currentInput == input,
+                  try AudioInputDevice.available().contains(where: { $0.id == selectedDevice.id && $0.deviceID == selectedDevice.deviceID }) else {
+                throw AppFailure.message("录音设备在准备期间发生变化，请检查设备后重新开始录音。")
+            }
             engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: input) { buffer, _ in pipe.receive(buffer) }
             engine.prepare()
             try engine.start()
@@ -173,6 +250,8 @@ final class Recorder: ObservableObject {
             let limitSeconds = autoStopAfterMinutes.map { $0 * 60 }
             recordingActivity = ProcessInfo.processInfo.beginActivity(options: .idleSystemSleepDisabled, reason: "正在录音")
             isRecording = true
+            activeInputUID = selectedDevice.id
+            activeInputName = selectedDevice.name
             elapsed = 0
             remainingSeconds = limitSeconds
             status = "正在录音 · 日语实时转写"
@@ -208,9 +287,12 @@ final class Recorder: ObservableObject {
         timer?.invalidate()
         timer = nil
         remainingSeconds = nil
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver); self.engineObserver = nil }
         engine?.stop()
         engine?.inputNode.removeTap(onBus: 0)
         engine = nil
+        activeInputUID = nil
+        activeInputName = nil
         elapsed = pipe?.recordedDuration ?? elapsed
         pipe?.finish()
         pipe = nil
@@ -237,8 +319,11 @@ final class Recorder: ObservableObject {
     }
 
     private func cleanup() async {
+        if let engineObserver { NotificationCenter.default.removeObserver(engineObserver); self.engineObserver = nil }
         if let engine { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
         engine = nil
+        activeInputUID = nil
+        activeInputName = nil
         pipe = nil
         continuation?.finish()
         continuation = nil

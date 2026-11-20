@@ -200,6 +200,26 @@ struct ContentView: View {
                 Button { if let id = library.selection { NSWorkspace.shared.open(library.directory(id)) } } label: { Image(systemName: "folder") }.help("打开本地录音文件夹").disabled(library.selected == nil)
             }
             HStack(spacing: 8) {
+                Picker("录音设备", selection: $recorder.selectedInputUID) {
+                    Text("跟随系统默认（\(recorder.defaultInputName)）").tag("")
+                    ForEach(recorder.inputDevices) { device in
+                        Text(device.name).tag(device.id)
+                    }
+                    if recorder.selectedInputUnavailable {
+                        Text("上次选择的设备（未连接）").tag(recorder.selectedInputUID)
+                    }
+                }.frame(maxWidth: 360).disabled(recorder.busy)
+                Button { recorder.refreshInputDevices() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("刷新录音设备").disabled(recorder.busy)
+                if let name = recorder.activeInputName {
+                    Text("正在使用 \(name)").foregroundStyle(.secondary).lineLimit(1)
+                } else if let error = recorder.inputDeviceError {
+                    Text(error).foregroundStyle(.orange).lineLimit(2)
+                } else if recorder.selectedInputUnavailable {
+                    Text("设备未连接，请重新选择").foregroundStyle(.orange)
+                }
+            }.font(.caption)
+            HStack(spacing: 8) {
                 Toggle("定时停止录音", isOn: $autoStopEnabled).toggleStyle(.checkbox)
                 if autoStopEnabled {
                     TextField("录音时限（分钟）", text: $autoStopMinutes, prompt: Text("100"))

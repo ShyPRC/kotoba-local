@@ -6,6 +6,12 @@ A native macOS app for Japanese lecture recording, live Japanese transcription, 
 
 [更新日志](CHANGELOG.md)
 
+## 下载测试版
+
+[下载 v0.2.0-beta.1（Apple 芯片 Mac）](https://github.com/ShyPRC/kotoba-local/releases/download/v0.2.0-beta.1/KotobaLocal-v0.2.0-beta.1-macOS-arm64.zip)
+
+需要 macOS 26 或更新版本。解压后打开「言录.app」。本测试版采用本机签名，尚未 Apple 公证，首次打开时 macOS 可能要求在「系统设置 → 隐私与安全性」中确认。AirPods 实录与热插拔仍待验证。首次打开相关说明见 [Apple 支持](https://support.apple.com/zh-cn/102445)。
+
 ## 从源码构建
 
 需要 Apple 芯片 Mac、macOS 26 或更新版本，以及包含 macOS 26 SDK 的 Xcode 26 或更新版本。先打开 Xcode，完成其首次启动设置。
@@ -23,7 +29,7 @@ open dist/言录.app
 sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 ```
 
-本仓库发布源码；构建脚本会在你的 Mac 上生成并本机签名应用。Apple 的语言模型由系统单独下载，不随仓库分发。
+构建脚本会在你的 Mac 上生成并本机签名应用。Apple 的语言模型由系统单独下载，不随仓库分发。
 
 ## 打开应用
 
@@ -37,6 +43,8 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
 也可以导入系统支持的音频文件进行本地转写，或通过「回听录音」播放原始音频。点击文件夹按钮可直接查看原始录音和 JSON 记录。
 
+底部的「录音设备」可选择 Mac 内置麦克风、已连接的 AirPods 或外接麦克风，也可选择「跟随系统默认」。开录前选择，应用会记住设置。录音中会显示实际使用的设备。设备断开或音频配置变化导致录音中断时，应用会停止并保存已有音频，提示重新选择设备后开录。
+
 ## 数据与离线使用
 
 - 每次录音独立保存在 `~/Library/Application Support/KotobaLocal/Recordings/<UUID>/`。
@@ -48,7 +56,7 @@ sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
 ## 当前范围
 
-- 录制系统当前默认麦克风；暂不支持直接采集系统内部声音或说话人区分。
+- 支持选择录音输入设备，或在开录时使用系统默认麦克风。
 - 中文按确认后的段落更新，不是逐字同声传译。
 - 不同课堂的距离、噪声、专业词汇会影响识别和翻译效果；重要内容可回听核对。
 - 原始音频持续写入磁盘，意外退出后通常可以在录音目录中找回；未定稿文字或未写完的音频尾部可能不完整。可重新导入原音频转写。
